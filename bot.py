@@ -233,3 +233,28 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+@dp.message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "commission")
+async def process_commission(message: types.Message):
+    user_id = message.from_user.id
+    state = user_states[user_id]
+    
+    try:
+        commission = float(message.text.replace(',', '.'))
+        state["commission"] = commission
+        
+        amount = state["amount"]
+        rate = state["rate"]
+        total = amount * rate - commission
+        
+        await message.answer(
+            f"💰 TOTAL TO WITHDRAW:\n"
+            f"Amount: ${amount:,.2f}\n"
+            f"Rate: 1 = {rate:.4f}\n"
+            f"Fee: -${commission:,.2f}\n"
+            f"📥 You receive: ${total:,.2f}"
+        )
+        
+        del user_states[user_id]
+        
+    except ValueError:
+        await message.answer("❌ Enter a number like 0.35")
