@@ -190,15 +190,20 @@ async def process_commission(message: types.Message):
     except ValueError:
         await message.answer("❌ Enter a number! Example: 0.35")
 
-@dp.message(F.text)
-async def process_amount(message: types.Message):
-    message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "exchange_rate")
+@dp.message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "exchange_rate")
 async def process_exchange_rate(message: types.Message):
     user_id = message.from_user.id
     state = user_states[user_id]
     
     try:
-        exchange_rate = float(message.text.replace(",", "."))
+        rate = float(message.text.replace(',', '.'))
+        state["rate"] = rate
+        state["step"] = "commission"  
+        
+        await message.answer("💳 Enter commission (like 0.35):")
+        
+    except ValueError:
+        await message.answer("❌ Enter rate like 1.2345")
         
         # Расчет
         amount_in = state["amount"] if state["input_is_currency_in"] else 0
