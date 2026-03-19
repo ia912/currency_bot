@@ -2,7 +2,7 @@ import asyncio
 import os
 from io import BytesIO
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont
 
@@ -158,7 +158,7 @@ async def amount_choice_callback(callback: types.CallbackQuery):
     user_states[user_id]["step"] = "amount"
 
 # ГЛАВНАЯ КОМАНДА
-@dp.message(commands=['start'])
+@dp.message(CommandStart())
 async def start_command(message: types.Message):
     await message.answer("💰 Currency Calculator\n📊 Enter AMOUNT (1000.50):")
 
