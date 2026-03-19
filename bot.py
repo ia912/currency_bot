@@ -2,7 +2,105 @@ import asyncio
 import os
 from io import BytesIO
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from PIL import Image, ImageDraw, ImageFont
+
+bot = Bot(token=os.getenv("BOT_TOKEN"))
+dp = Dispatcher()
+user_states = {}
+
+CURRENCIES = ["RUB", "USD", "USN", "USDT", "AED", "AEN", "CNY"]
+
+def is_direct_pair(currency_in, currency_out):
+    """Проверяет прямую пару RUB→другая или обратную"""
+    direct_pairs = [("RUB", "USD"), ("RUB", "USDT"), ("RUB", "USN"), 
+                   ("RUB", "AED"), ("RUB", "AEN"), ("RUB", "CNY")]
+    return (currency_in, currency_out) in direct_pairs
+
+def calculate_exchange(amount_in, currency_in, currency_out, exchange_rate, commission_pct, input_is_currency_in):
+    """Основная формула расчета"""
+    commission_factor = 1 - commission_pct / 100
+    
+    if input_is_currency_in:  # Amount in Currency IN → считаем Currency OUT
+        if is_direct_pair(currency_in, currency_out):
+            result = amount_in * exchange_rate * commission_factor
+        else:  # Обратная пара
+            effective_rate = 1 / exchange_rate
+            result = amount_in * effective_rate * commission_factor
+    else:  # Amount in Currency OUT → считаем Currency IN
+        if is_direct_pair(currency_in, currency_out):
+            result = amount_out / exchange_rate / commission_factor
+        else:  # Обратная пара  
+            effective_rate = 1 / exchange_rate
+            result = amount_out / effective_rate / commission_factor
+    
+    return round(result, 2)
+
+def create_table_image(amount1, currency1, amount2, currency2, exchange_rate, commission_pct, input_is_currency_in):
+    """Таблица со светло-желтым фоном"""
+    w, h = 800, 500
+    img = Image.new("RGB", (w, h), (255, 240, 180))  # Светло-желтый фон
+    draw = ImageDraw.Draw(img)
+    
+    # Белая карточка
+    draw.rounded_rectangle([20, 20, w-20, h-20], radius=25, fill="white")
+    
+    # Шрифты
+    try:
+        font = ImageFont.truetype("arial.ttf", 20)
+        font_b = ImageFont.truetype("arialbd.ttf", 24)
+    except:
+        font = ImageFont.load_default()
+        font_b = ImageFont.load_default()
+    
+    x1, x2, x3 = 40, 280, 500
+    y = 45
+    
+    # Заголовки
+    draw.text((x1, y), " ", font=font_b, fill="black")
+    draw.text((x2, y), "CCY", font=font_b, fill="black")
+    draw.text((x3, y), "VALUE", font=font_b, fill="black")
+    y += 60
+    
+    # 4 строки таблицы
+    if input_is_currency_in:
+        rows = [
+            ("Amount in", currency1, f"{amount1:,.2f}"),
+            ("Exchange rate", f"{currency1}{currency2}", f"{exchange_rate:.4f}"),
+            ("Commission", "%", f"{commission_pct:.2f}%"),
+            ("Amount out", currency2, f"{amount2:,.2f}")
+        ]
+    else:
+        rows = [
+            ("Amount out", currency2, f"{amount1:,.2f}"),
+            ("Exchange rate", f"{currency1}{currency2}", f"{exchange_rate:.4f}"),
+            ("Commission", "%", f"{commission_pct:.2f}%"),
+            ("Amount in", currency1, f"{amount2:,.2f}")
+        ]
+    
+    for i, (label, ccy, value) in enumerate(rows):
+        if i % 2 == 1:
+            draw.rectangle([30, y-5, w-30, y+55], fill=(255, 255, 220))  # Светло-зеленый
+        
+        draw.text((x1, y), label, font=font, fill="black")
+        draw.text((x2, y), ccy, font=font, fill="black")
+        draw.text((x3, y), value, font=font_b, fill="black")
+        y += 70
+    
+    bio = BytesIO()
+    img.save(bio, "PNG")
+    bio.seek(0)
+    return bio
+
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇷🇺 RUB", callback_data="currency_in:RUB"),
+         InlineKeyboardButton(text="🇺🇸 USD", callback_data="currency_in:USD")],
+        [InlineKeyboardButton(text="🪙 USN", callback_data="currency_in:USN"),
+         InlineKeyboardButton(text="₿ USDT", callback_data="currency_in:USDT")],
+        [InlineKeyboardButton(text="🇦🇪 AED", callback_data="currency_in:AED"),
 InlineKeyboardButton(text="🇦🇪 AEN", callback_data="currency_in:AEN")],
         [InlineKeyboardButton(text="🇨🇳 CNY", callback_data="currency_in:CNY")]
     ])
