@@ -157,63 +157,60 @@ async def amount_choice_callback(callback: types.CallbackQuery):
     )
     user_states[user_id]["step"] = "amount"
 
-# ГЛОБАЛЬНЫЙ ОБРАБОТЧИК СОСТОЯНИЙ (заменяет все!)
 @dp.message(F.text)
 async def handle_states(message: types.Message):
     user_id = message.from_user.id
     
-    # ШАГ 1: Если нет состояния = ждем сумму
+    # ШАГ 1: Первая сумма (нет состояния)
     if user_id not in user_states:
         try:
             amount = float(message.text.replace(',', '.'))
-            if amount <= 0:
-                await message.answer("❌ Amount > 0 (1000.50)")
-                return
-            user_states[user_id] = {"amount": amount, "step": "exchange_rate"}
-            await message.answer("💱 Enter EXCHANGE RATE (1.2345):")
+            if amount > 0:
+                user_states[user_id] = {"amount": amount, "step": "rate"}
+                await message.answer("💱 Enter RATE (1.2345):")
+                return  # ← КРИТИЧНО!
         except:
             await message.answer("❌ Enter amount (1000.50)")
-        return
+            return
+    
+    state = user_states[user_id]
     
     # ШАГ 2: Курс
-    if user_states[user_id]["step"] == "exchange_rate":
+    if state["step"] == "rate":
         try:
             rate = float(message.text.replace(',', '.'))
-            user_states[user_id]["rate"] = rate
-            user_states[user_id]["step"] = "commission"
+            state["rate"] = rate
+            state["step"] = "commission"
             await message.answer("💳 Enter COMMISSION (0.35):")
+            return
         except:
             await message.answer("❌ Enter rate (1.2345)")
-        return
+            return
     
     # ШАГ 3: Комиссия
-    if user_states[user_id]["step"] == "commission":
+    if state["step"] == "commission":
         try:
             commission = float(message.text.replace(',', '.'))
-            state = user_states[user_id]
             total = state["amount"] * state["rate"] - commission
-            
             await message.answer(
-                f"💰 TOTAL TO WITHDRAW:\n"
+                f"💰 TOTAL:\n"
                 f"Amount: ${state['amount']:,.2f}\n"
                 f"Rate: 1 = {state['rate']:.4f}\n"
                 f"Fee: -${commission:,.2f}\n"
-                f"📥 You receive: ${total:,.2f}"
+                f"📥 RECEIVE: ${total:,.2f}"
             )
-            del user_states[user_id]  # СБРОС
+            del user_states[user_id]
+            return
         except:
             await message.answer("❌ Enter commission (0.35)")
-        return
+            return
 
-# УДАЛИТЕ ВСЕ другие @dp.message() handlers!
 @dp.message()
 async def catch_all(message: types.Message):
     if message.text == '/start':
-        user_states.clear()  # СБРОС всех состояний
-        await message.answer("📊 /start - Enter amount:")
+        await message.answer("📊 Enter amount:")
     else:
-        await message.answer("❌ /start first")
-        
+        await message.answer("❌ /start")
         # Расчет
         amount_in = state["amount"] if state["input_is_currency_in"] else 0
         amount_out = state["amount"] if not state["input_is_currency_in"] else 0
