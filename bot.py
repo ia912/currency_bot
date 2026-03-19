@@ -1,3 +1,8 @@
+import asyncio
+import os
+from io import BytesIO
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters
 InlineKeyboardButton(text="🇦🇪 AEN", callback_data="currency_in:AEN")],
         [InlineKeyboardButton(text="🇨🇳 CNY", callback_data="currency_in:CNY")]
     ])
