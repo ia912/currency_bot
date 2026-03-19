@@ -157,53 +157,56 @@ async def amount_choice_callback(callback: types.CallbackQuery):
     )
     user_states[user_id]["step"] = "amount"
 
+# 1. ШАГ 1: Сумма → Курс
 @dp.message(F.text)
 async def process_amount(message: types.Message):
     user_id = message.from_user.id
-    if user_id not in user_states or user_states[user_id]["step"] != "amount":
-        return
-        
     try:
-        amount = float(message.text.replace(",", "."))
-        user_states[user_id]["amount"] = amount
-        
-        await message.answer(
-            "📊 <b>Commission in %</b>\n\n"
-            "Example: <code>0.35</code>", parse_mode="HTML"
-        )
-        user_states[user_id]["step"] = "commission"
-    except ValueError:
-        await message.answer("❌ Enter a number! Example: 2100000")
+        amount = float(message.text.replace(',', '.'))
+        user_states[user_id] = {"amount": amount, "step": "exchange_rate"}
+        await message.answer("💱 Enter EXCHANGE RATE (like 1.2345):")
+    except:
+        await message.answer("❌ Enter amount (1000.50)")
 
-@dp.message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "commission")
-async def process_commission(message: types.Message):
-    user_id = message.from_user.id
-    try:
-        commission = float(message.text.replace(",", "."))
-        user_states[user_id]["commission"] = commission
-        
-        await message.answer(
-            "💹 <b>Exchange rate</b>\n\n"
-            "Example: <code>77.2733</code>", parse_mode="HTML"
-        )
-        user_states[user_id]["step"] = "exchange_rate"
-    except ValueError:
-        await message.answer("❌ Enter a number! Example: 0.35")
-
+# 2. ШАГ 2: Курс → Комиссия  
 @dp.message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "exchange_rate")
 async def process_exchange_rate(message: types.Message):
     user_id = message.from_user.id
     state = user_states[user_id]
-    
     try:
         rate = float(message.text.replace(',', '.'))
         state["rate"] = rate
-        state["step"] = "commission"  
-        
-        await message.answer("💳 Enter commission (like 0.35):")
-        
-    except ValueError:
-        await message.answer("❌ Enter rate like 1.2345")
+        state["step"] = "commission"
+        await message.answer("💳 Enter COMMISSION (like 0.35):")
+    except:
+        await message.answer("❌ Enter rate (1.2345)")
+
+# 3. ШАГ 3: Комиссия → Расчет
+@dp.message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "commission")
+async def process_commission(message: types.Message):
+    user_id = message.from_user.id
+    state = user_states[user_id]
+    try:
+        commission = float(message.text.replace(',', '.'))
+        total = state["amount"] * state["rate"] - commission
+        await message.answer(
+            f"💰 TOTAL:\n"
+            f"Amount: ${state['amount']:,.2f}\n"
+            f"Rate: {state['rate']:.4f}\n"
+            f"Fee: ${commission:,.2f}\n"
+            f"📥 RECEIVE: ${total:,.2f}"
+        )
+        del user_states[user_id]
+    except:
+        await message.answer("❌ Enter commission (0.35)")
+
+# 4. Ловушка ВСЕГО остального (последней!)
+@dp.message()
+async def catch_all(message: types.Message):
+    if message.text == '/start':
+        await message.answer("📊 /start - Enter amount:")
+    else:
+        await message.answer("❌ Use /start")
         
         # Расчет
         amount_in = state["amount"] if state["input_is_currency_in"] else 0
