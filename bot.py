@@ -192,7 +192,7 @@ async def process_commission(message: types.Message):
 
 @dp.message(F.text)
 async def process_amount(message: types.Message):
-message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "exchange_rate")
+    message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "exchange_rate")
 async def process_exchange_rate(message: types.Message):
     user_id = message.from_user.id
     state = user_states[user_id]
