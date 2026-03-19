@@ -232,7 +232,6 @@ async def catch_all(message: types.Message):
         await message.answer_photo(img, caption="✅ <b>Calculation complete!</b>", parse_mode="HTML")
         del user_states[user_id]
         
-    except Exception as e:
         await message.answer(f"❌ Error: {e}\nTry again with /start")
 
 async def main():
