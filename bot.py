@@ -163,7 +163,7 @@ async def start_command(message: types.Message):
     await message.answer("💰 Currency Calculator\n📊 Enter AMOUNT (1000.50):")
 
 # ЕДИНСТВЕННЫЙ ОБРАБОТЧИК (все шаги здесь!)
-@dp.message(F.text & ~F.command)
+@dp.message(lambda m: m.from_user.id not in user_states)
 async def currency_calculator(message: types.Message):
     user_id = message.from_user.id
     
