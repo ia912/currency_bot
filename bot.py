@@ -219,11 +219,11 @@ async def currency_calculator(message: types.Message):
 async def unknown(message: types.Message):
     await message.answer("❌ Send /start or enter numbers only")
         # Расчет
-        amount_in = state["amount"] if state["input_is_currency_in"] else 0
-        amount_out = state["amount"] if not state["input_is_currency_in"] else 0
+    amount_in = state["amount"] if state["input_is_currency_in"] else 0
+    amount_out = state["amount"] if not state["input_is_currency_in"] else 0
         
-        currency_in = state["currency_in"]
-        currency_out = state["currency_out"]
+    currency_in = state["currency_in"]
+    currency_out = state["currency_out"]
         
         if state["input_is_currency_in"]:
             result_amount = calculate_exchange(amount_in, currency_in, currency_out, 
