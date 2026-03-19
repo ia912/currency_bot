@@ -172,14 +172,25 @@ async def process_amount(message: types.Message):
 @dp.message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "exchange_rate")
 async def process_exchange_rate(message: types.Message):
     user_id = message.from_user.id
-    state = user_states[user_id]
+    
+    print(f"DEBUG: User {user_id} step={user_states.get(user_id, {}).get('step', 'NO_STATE')}")  # ОТЛАДКА
+    
     try:
         rate = float(message.text.replace(',', '.'))
-        state["rate"] = rate
-        state["step"] = "commission"
-        await message.answer("💳 Enter COMMISSION (like 0.35):")
+        
+        # ✅ ПРЯМАЯ ЗАПИСЬ (без state переменной!)
+        user_states[user_id] = {
+            "amount": user_states[user_id]["amount"],
+            "rate": rate,
+            "step": "commission"  # ✅ ПРИНУДИТЕЛЬНО!
+        }
+        
+        print(f"DEBUG: Set step=commission for {user_id}")  # ОТЛАДКА
+        
+        await message.answer("💳 Enter COMMISSION (0.35):")
+        
     except:
-        await message.answer("❌ Enter rate (1.2345)")
+        await message.answer("❌ Enter rate (87.2345)")
 
 # 3. ШАГ 3: Комиссия → Расчет
 @dp.message(lambda m: m.from_user.id in user_states and user_states[m.from_user.id]["step"] == "commission")
