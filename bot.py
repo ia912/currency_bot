@@ -225,14 +225,14 @@ async def unknown(message: types.Message):
     currency_in = state["currency_in"]
     currency_out = state["currency_out"]
         
-        if state["input_is_currency_in"]:
-            result_amount = calculate_exchange(amount_in, currency_in, currency_out, 
+    if state["input_is_currency_in"]:
+        result_amount = calculate_exchange(amount_in, currency_in, currency_out, 
                                              exchange_rate, state["commission"], True)
-            display_amount1, display_amount2 = amount_in, result_amount
-        else:
-            result_amount = calculate_exchange(amount_out, currency_in, currency_out, 
+        display_amount1, display_amount2 = amount_in, result_amount
+    else:
+        result_amount = calculate_exchange(amount_out, currency_in, currency_out, 
                                              exchange_rate, state["commission"], False)
-            display_amount1, display_amount2 = result_amount, amount_out
+        display_amount1, display_amount2 = result_amount, amount_out
         
         # Создание картинки
         img = create_table_image(display_amount1, currency_in, display_amount2, 
