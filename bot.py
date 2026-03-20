@@ -256,11 +256,11 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
     img = Image.new("RGB", (width, height), PAGE_BG)
     draw = ImageDraw.Draw(img)
 
-    title_font = load_font(60, bold=True)
-    subtitle_font = load_font(34, bold=True)
-    header_font = load_font(34, bold=True)
-    cell_font = load_font(34, bold=True)
-    value_font = load_font(38, bold=True)
+    title_font = load_font(300, bold=True)
+    subtitle_font = load_font(170, bold=True)
+    header_font = load_font(170, bold=True)
+    cell_font = load_font(170, bold=True)
+    value_font = load_font(190, bold=True)
 
     card_left, card_top, card_right, card_bottom = 50, 45, width - 50, height - 45
     draw.rounded_rectangle(
