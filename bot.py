@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import os
@@ -23,9 +22,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 CURRENCIES = ["RUB", "USD", "USN", "USDT", "AED", "AEN", "CNY"]
 
-# Direct pairs for the original inversion rule:
-# if send_currency -> receive_currency is one of these pairs, rate is used as entered;
-# for the reverse direction, the bot uses 1 / rate in the formula.
+# Internal direct pairs:
+# send RUB -> receive foreign currency uses the entered rate as-is.
+# For the reverse direction the formula uses 1 / entered_rate.
 DIRECT_PAIRS = {
     ("RUB", "USD"),
     ("RUB", "USN"),
@@ -46,10 +45,9 @@ CURRENCY_LABELS = {
 }
 
 # Table colors
-TABLE_OUTER_BG = (246, 248, 250)
-ROW_WHITE = (255, 255, 255)
-ROW_BLUE = (212, 236, 255)
-GRID = (214, 214, 214)
+WHITE = (255, 255, 255)
+ROW_BLUE = (214, 236, 255)
+GRID = (210, 210, 210)
 TEXT = (18, 18, 18)
 
 RateMode = Literal["direct", "reverse", "custom"]
@@ -58,8 +56,8 @@ dp = Dispatcher(storage=MemoryStorage())
 
 
 class CalcStates(StatesGroup):
-    waiting_currency_in = State()
-    waiting_currency_out = State()
+    waiting_currency_in = State()   # receive currency
+    waiting_currency_out = State()  # send currency
     waiting_amount_side = State()
     waiting_amount = State()
     waiting_commission = State()
@@ -92,18 +90,8 @@ def build_currency_keyboard(prefix: str, exclude: Optional[str] = None) -> Inlin
 def build_amount_side_keyboard(currency_in: str, currency_out: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"Amount in {currency_in}",
-                    callback_data="amount_side:in",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Amount in {currency_out}",
-                    callback_data="amount_side:out",
-                )
-            ],
+            [InlineKeyboardButton(text=f"Amount in {currency_in}", callback_data="amount_side:in")],
+            [InlineKeyboardButton(text=f"Amount in {currency_out}", callback_data="amount_side:out")],
             [InlineKeyboardButton(text="🔄 Restart", callback_data="restart")],
         ]
     )
@@ -188,17 +176,16 @@ def resolve_rate(send_currency: str, receive_currency: str, entered_rate: Decima
         return entered_rate, "direct"
     if rate_mode == "reverse":
         return Decimal("1") / entered_rate, "reverse"
-
     return entered_rate, "custom"
 
 
-def calculate_internal_result(
+def calculate_result(
     amount_value: Decimal,
-    send_currency: str,
     receive_currency: str,
+    send_currency: str,
     entered_rate: Decimal,
     commission_pct: Decimal,
-    input_is_send_amount: bool,
+    input_is_receive_amount: bool,
 ) -> Dict[str, Any]:
     if amount_value <= 0:
         raise ValueError("Amount must be greater than 0")
@@ -211,23 +198,26 @@ def calculate_internal_result(
     if commission_factor <= 0:
         raise ValueError("Commission leaves nothing to calculate")
 
-    # Main equality, keeping the original calculation logic internally:
+    # Display semantics:
+    # currency_in  = currency that we receive
+    # currency_out = currency that we send
+    #
     # send_amount = receive_amount * effective_rate / (1 - commission)
     # receive_amount = send_amount * (1 - commission) / effective_rate
-    if input_is_send_amount:
-        send_amount = amount_value
-        receive_amount = send_amount * commission_factor / effective_rate
-    else:
+    if input_is_receive_amount:
         receive_amount = amount_value
         send_amount = receive_amount * effective_rate / commission_factor
+    else:
+        send_amount = amount_value
+        receive_amount = send_amount * commission_factor / effective_rate
 
-    before_margin = receive_amount * effective_rate
+    before_margin = send_amount * commission_factor
 
     return {
-        "send_currency": send_currency,
         "receive_currency": receive_currency,
-        "send_amount": send_amount,
+        "send_currency": send_currency,
         "receive_amount": receive_amount,
+        "send_amount": send_amount,
         "before_margin": before_margin,
         "entered_rate": entered_rate,
         "effective_rate": effective_rate,
@@ -236,101 +226,133 @@ def calculate_internal_result(
     }
 
 
-def get_fitted_font(
+def fit_font(
     draw: ImageDraw.ImageDraw,
     text: str,
-    max_width: int,
-    max_height: int,
+    box_width: int,
+    box_height: int,
     start_size: int,
-    bold: bool = False,
+    min_size: int,
+    bold: bool,
 ) -> ImageFont.ImageFont:
     size = start_size
-    while size >= 20:
+    while size >= min_size:
         font = load_font(size, bold=bold)
         bbox = draw.textbbox((0, 0), text, font=font)
         width = bbox[2] - bbox[0]
         height = bbox[3] - bbox[1]
-        if width <= max_width and height <= max_height:
+        if width <= box_width * 0.90 and height <= box_height * 0.72:
             return font
         size -= 4
-    return load_font(20, bold=bold)
+    return load_font(min_size, bold=bold)
 
 
-def draw_centered_text(
+def center_text(
     draw: ImageDraw.ImageDraw,
     box: Tuple[int, int, int, int],
     text: str,
-    bold: bool = False,
-    start_size: int = 120,
-    fill: Tuple[int, int, int] = TEXT,
+    font: ImageFont.ImageFont,
+    fill: Tuple[int, int, int],
 ) -> None:
     left, top, right, bottom = box
-    max_width = max(1, right - left - 40)
-    max_height = max(1, bottom - top - 30)
-    font = get_fitted_font(draw, text, max_width, max_height, start_size, bold=bold)
     bbox = draw.textbbox((0, 0), text, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
-    x = left + ((right - left - text_w) // 2)
-    y = top + ((bottom - top - text_h) // 2) - 6
+    x = left + (right - left - text_w) / 2
+    y = top + (bottom - top - text_h) / 2 - 3
     draw.text((x, y), text, font=font, fill=fill)
 
 
-def create_result_image(result: Dict[str, Any]) -> bytes:
-    width, height = 3600, 1350
-    margin = 55
-    table_left = margin
-    table_top = margin
-    table_right = width - margin
-    table_bottom = height - margin
+def prepare_display_rows(result: Dict[str, Any]) -> list[tuple[str, str, str, bool]]:
+    receive_currency = result["receive_currency"]
+    send_currency = result["send_currency"]
+    receive_amount = result["receive_amount"]
+    send_amount = result["send_amount"]
+    before_margin = result["before_margin"]
+    entered_rate = result["entered_rate"]
+    pair_label = f"{receive_currency}{send_currency}"
 
-    label_col_width = 1380
-    ccy_col_width = 760
-    value_col_width = (table_right - table_left) - label_col_width - ccy_col_width
-
-    x0 = table_left
-    x1 = x0 + label_col_width
-    x2 = x1 + ccy_col_width
-    x3 = x2 + value_col_width
-
-    row_count = 5
-    row_height = (table_bottom - table_top) // row_count
-
-    img = Image.new("RGB", (width, height), TABLE_OUTER_BG)
-    draw = ImageDraw.Draw(img)
-
-    draw.rectangle((table_left, table_top, table_right, table_top + row_count * row_height), fill=ROW_WHITE)
-
-    rows = [
-        ("TO AMOUNT IN", result["ui_currency_in"], format_decimal(result["receive_amount"], 2), True),
-        ("FX RATE", result["fx_rate_label"], format_rate_value(result["entered_rate"]), False),
-        ("BEFORE MARGIN", result["ui_currency_out"], format_decimal(result["before_margin"], 2), False),
-        ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2)}%", False),
-        ("FROM AMOUNT IN", result["ui_currency_out"], format_decimal(result["send_amount"], 2), True),
+    return [
+        ("TO AMOUNT IN", receive_currency, format_decimal(receive_amount, 2, strip_trailing=False), True),
+        ("FX RATE", pair_label, format_rate_value(entered_rate), False),
+        ("BEFORE MARGIN", send_currency, format_decimal(before_margin, 2, strip_trailing=False), False),
+        ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2, strip_trailing=False)}%", False),
+        ("FROM AMOUNT IN", send_currency, format_decimal(send_amount, 2, strip_trailing=False), True),
     ]
 
-    for row_index, (label, ccy, value, is_amount_row) in enumerate(rows):
-        top = table_top + row_index * row_height
+
+def create_result_image(result: Dict[str, Any]) -> bytes:
+    rows = prepare_display_rows(result)
+
+    width = 2300
+    row_height = 220
+    outer_margin = 36
+    table_width = width - 2 * outer_margin
+    height = outer_margin * 2 + row_height * len(rows)
+
+    img = Image.new("RGB", (width, height), WHITE)
+    draw = ImageDraw.Draw(img)
+
+    col1_w = int(table_width * 0.40)
+    col2_w = int(table_width * 0.22)
+    col3_w = table_width - col1_w - col2_w
+
+    x0 = outer_margin
+    x1 = x0 + col1_w
+    x2 = x1 + col2_w
+    x3 = x2 + col3_w
+    table_top = outer_margin
+
+    # Only 2nd and 4th rows are blue.
+    for idx in range(len(rows)):
+        top = table_top + idx * row_height
         bottom = top + row_height
-        row_fill = ROW_BLUE if row_index in {1, 3} else ROW_WHITE
-        draw.rectangle((table_left, top, table_right, bottom), fill=row_fill)
+        fill = ROW_BLUE if idx in (1, 3) else WHITE
+        draw.rectangle((x0, top, x3, bottom), fill=fill)
 
-        # Cell borders
-        draw.rectangle((x0, top, x1, bottom), outline=GRID, width=3)
-        draw.rectangle((x1, top, x2, bottom), outline=GRID, width=3)
-        draw.rectangle((x2, top, x3, bottom), outline=GRID, width=3)
+    table_bottom = table_top + row_height * len(rows)
 
-        # Much larger text
-        label_size = 128 if is_amount_row else 114
-        ccy_size = 128 if is_amount_row else 114
-        value_size = 136 if is_amount_row else 118
+    for i in range(len(rows) + 1):
+        y = table_top + i * row_height
+        draw.line((x0, y, x3, y), fill=GRID, width=3)
+    for x in (x0, x1, x2, x3):
+        draw.line((x, table_top, x, table_bottom), fill=GRID, width=3)
 
-        draw_centered_text(draw, (x0, top, x1, bottom), label, bold=is_amount_row, start_size=label_size)
-        draw_centered_text(draw, (x1, top, x2, bottom), ccy, bold=is_amount_row, start_size=ccy_size)
-        draw_centered_text(draw, (x2, top, x3, bottom), value, bold=is_amount_row, start_size=value_size)
+    for idx, (label, ccy, value, emphasize_amount) in enumerate(rows):
+        top = table_top + idx * row_height
+        bottom = top + row_height
 
-    # Outer border
-    draw.rectangle((table_left, table_top, table_right, table_top + row_count * row_height), outline=GRID, width=4)
+        label_font = fit_font(
+            draw,
+            label,
+            x1 - x0,
+            row_height,
+            start_size=104 if emphasize_amount else 96,
+            min_size=74,
+            bold=True,
+        )
+        ccy_font = fit_font(
+            draw,
+            ccy,
+            x2 - x1,
+            row_height,
+            start_size=104 if emphasize_amount else 96,
+            min_size=74,
+            bold=True,
+        )
+        value_font = fit_font(
+            draw,
+            value,
+            x3 - x2,
+            row_height,
+            start_size=118 if emphasize_amount else 108,
+            min_size=80,
+            bold=True,
+        )
+
+        center_text(draw, (x0, top, x1, bottom), label, label_font, TEXT)
+        center_text(draw, (x1, top, x2, bottom), ccy, ccy_font, TEXT)
+        center_text(draw, (x2, top, x3, bottom), value, value_font, TEXT)
 
     buffer = BytesIO()
     img.save(buffer, format="PNG")
@@ -358,21 +380,21 @@ async def restart_callback(callback: CallbackQuery, state: FSMContext) -> None:
 @dp.callback_query(CalcStates.waiting_currency_in, F.data.startswith("currency_in:"))
 async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    ui_currency_in = callback.data.split(":", maxsplit=1)[1]
+    currency_in = callback.data.split(":", maxsplit=1)[1]
 
-    if ui_currency_in not in CURRENCIES:
+    if currency_in not in CURRENCIES:
         await callback.message.answer("❌ Unsupported currency. Send /start to try again.")
         await state.clear()
         return
 
-    await state.update_data(ui_currency_in=ui_currency_in)
+    await state.update_data(currency_in=currency_in)
     await state.set_state(CalcStates.waiting_currency_out)
 
     await callback.message.edit_text(
         f"💸 <b>Currency OUT</b>\n\n"
-        f"Selected IN: <code>{ui_currency_in}</code>\n"
+        f"Selected Currency IN: <code>{currency_in}</code>\n"
         f"Currency that we send:",
-        reply_markup=build_currency_keyboard("currency_out", exclude=ui_currency_in),
+        reply_markup=build_currency_keyboard("currency_out", exclude=currency_in),
         parse_mode="HTML",
     )
 
@@ -380,26 +402,26 @@ async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> No
 @dp.callback_query(CalcStates.waiting_currency_out, F.data.startswith("currency_out:"))
 async def currency_out_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    ui_currency_out = callback.data.split(":", maxsplit=1)[1]
+    currency_out = callback.data.split(":", maxsplit=1)[1]
     data = await state.get_data()
-    ui_currency_in = data.get("ui_currency_in")
+    currency_in = data.get("currency_in")
 
-    if ui_currency_out not in CURRENCIES or not ui_currency_in:
+    if currency_out not in CURRENCIES or not currency_in:
         await callback.message.answer("❌ Session expired. Send /start to begin again.")
         await state.clear()
         return
 
-    if ui_currency_out == ui_currency_in:
+    if currency_out == currency_in:
         await callback.answer("Currency OUT must be different", show_alert=True)
         return
 
-    await state.update_data(ui_currency_out=ui_currency_out)
+    await state.update_data(currency_out=currency_out)
     await state.set_state(CalcStates.waiting_amount_side)
 
     await callback.message.edit_text(
         f"↕️ <b>Select the amount you want to enter</b>\n\n"
-        f"<code>{ui_currency_in} ↔ {ui_currency_out}</code>",
-        reply_markup=build_amount_side_keyboard(ui_currency_in, ui_currency_out),
+        f"<code>{currency_in} ↔ {currency_out}</code>",
+        reply_markup=build_amount_side_keyboard(currency_in, currency_out),
         parse_mode="HTML",
     )
 
@@ -415,7 +437,7 @@ async def amount_side_callback(callback: CallbackQuery, state: FSMContext) -> No
         await state.clear()
         return
 
-    input_currency = data["ui_currency_in"] if side == "in" else data["ui_currency_out"]
+    input_currency = data["currency_in"] if side == "in" else data["currency_out"]
     await state.update_data(input_side=side)
     await state.set_state(CalcStates.waiting_amount)
 
@@ -475,13 +497,11 @@ async def process_commission(message: Message, state: FSMContext) -> None:
     await state.set_state(CalcStates.waiting_rate)
 
     data = await state.get_data()
-    ui_currency_in = data["ui_currency_in"]
-    ui_currency_out = data["ui_currency_out"]
-    rate_pair = f"{ui_currency_in}{ui_currency_out}"
+    rate_label = f"{data['currency_in']}{data['currency_out']}"
 
     await message.answer(
-        f"📈 <b>Enter exchange rate for {rate_pair}</b>\n\n"
-        f"Examples: <code>0.0112</code> or <code>90</code>",
+        f"📈 <b>Enter exchange rate for {rate_label}</b>\n\n"
+        "Examples: <code>0.0112</code> or <code>90</code>",
         reply_markup=restart_keyboard(),
         parse_mode="HTML",
     )
@@ -494,45 +514,31 @@ async def process_rate(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        entered_rate = parse_decimal(message.text)
+        rate = parse_decimal(message.text)
     except ValueError:
         await message.answer("❌ Invalid exchange rate. Example: 90")
         return
 
-    if entered_rate <= 0:
+    if rate <= 0:
         await message.answer("❌ Exchange rate must be greater than 0.")
         return
 
     data = await state.get_data()
 
-    ui_currency_in = data["ui_currency_in"]   # currency that we receive
-    ui_currency_out = data["ui_currency_out"] # currency that we send
-
-    send_currency = ui_currency_out
-    receive_currency = ui_currency_in
-    input_is_send_amount = data["input_side"] == "out"
-
     try:
-        calc = calculate_internal_result(
+        result = calculate_result(
             amount_value=Decimal(data["amount"]),
-            send_currency=send_currency,
-            receive_currency=receive_currency,
-            entered_rate=entered_rate,
+            receive_currency=data["currency_in"],
+            send_currency=data["currency_out"],
+            entered_rate=rate,
             commission_pct=Decimal(data["commission_pct"]),
-            input_is_send_amount=input_is_send_amount,
+            input_is_receive_amount=data["input_side"] == "in",
         )
     except ValueError as exc:
         await message.answer(f"❌ {exc}")
         return
 
-    image_payload = {
-        **calc,
-        "ui_currency_in": ui_currency_in,
-        "ui_currency_out": ui_currency_out,
-        "fx_rate_label": f"{ui_currency_in}{ui_currency_out}",
-    }
-
-    image_bytes = create_result_image(image_payload)
+    image_bytes = create_result_image(result)
 
     await message.answer_photo(
         BufferedInputFile(image_bytes, filename="calculation.png"),
