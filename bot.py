@@ -1,3 +1,4 @@
+
 import asyncio
 import logging
 import os
@@ -22,8 +23,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 CURRENCIES = ["RUB", "USD", "USN", "USDT", "AED", "AEN", "CNY"]
 
-# Прямые пары из исходного ТЗ для логики инверсии курса.
-# Логику расчета не меняем: внутренне currency_in = what we send, currency_out = what we receive.
+# Direct pairs for the original inversion rule:
+# if send_currency -> receive_currency is one of these pairs, rate is used as entered;
+# for the reverse direction, the bot uses 1 / rate in the formula.
 DIRECT_PAIRS = {
     ("RUB", "USD"),
     ("RUB", "USN"),
@@ -43,15 +45,14 @@ CURRENCY_LABELS = {
     "CNY": "🇨🇳 CNY",
 }
 
-# Новый визуальный стиль итоговой таблицы: как на референсе.
-TABLE_BG = (247, 247, 247)
-WHITE = (255, 255, 255)
-GRID = (223, 223, 223)
-HIGHLIGHT = (182, 231, 205)
-TEXT = (17, 17, 17)
+# Table colors
+TABLE_OUTER_BG = (246, 248, 250)
+ROW_WHITE = (255, 255, 255)
+ROW_BLUE = (212, 236, 255)
+GRID = (214, 214, 214)
+TEXT = (18, 18, 18)
 
 RateMode = Literal["direct", "reverse", "custom"]
-
 
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -135,7 +136,7 @@ def quantize_pattern(places: int) -> Decimal:
 
 def format_decimal(value: Decimal, places: int = 2, strip_trailing: bool = False) -> str:
     quantized = value.quantize(quantize_pattern(places), rounding=ROUND_HALF_UP)
-    text = f"{quantized:,.{places}f}".replace(",", " ")
+    text = f"{quantized:,.{places}f}"
     if strip_trailing and "." in text:
         text = text.rstrip("0").rstrip(".")
     return text
@@ -170,191 +171,166 @@ def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def get_rate_mode(currency_in: str, currency_out: str) -> RateMode:
-    if (currency_in, currency_out) in DIRECT_PAIRS:
+def get_rate_mode(send_currency: str, receive_currency: str) -> RateMode:
+    if (send_currency, receive_currency) in DIRECT_PAIRS:
         return "direct"
-    if (currency_out, currency_in) in DIRECT_PAIRS:
+    if (receive_currency, send_currency) in DIRECT_PAIRS:
         return "reverse"
     return "custom"
 
 
-def get_entered_rate_pair_label(currency_in: str, currency_out: str) -> str:
-    rate_mode = get_rate_mode(currency_in, currency_out)
-    if rate_mode == "reverse":
-        return f"{currency_out}-{currency_in}"
-    return f"{currency_in}-{currency_out}"
-
-
-def resolve_rate(currency_in: str, currency_out: str, entered_rate: Decimal) -> Tuple[Decimal, RateMode]:
+def resolve_rate(send_currency: str, receive_currency: str, entered_rate: Decimal) -> Tuple[Decimal, RateMode]:
     if entered_rate <= 0:
         raise ValueError("Exchange rate must be greater than 0")
 
-    rate_mode = get_rate_mode(currency_in, currency_out)
+    rate_mode = get_rate_mode(send_currency, receive_currency)
     if rate_mode == "direct":
         return entered_rate, "direct"
     if rate_mode == "reverse":
         return Decimal("1") / entered_rate, "reverse"
 
-    # Для кросс-пар вне списка RUB-XXX используем курс как ввёл пользователь.
     return entered_rate, "custom"
 
 
-def get_calc_currencies_from_ui(ui_currency_in: str, ui_currency_out: str) -> Tuple[str, str]:
-    # Пользовательский интерфейс:
-    # currency_in  = what we receive
-    # currency_out = what we send
-    # Внутренний расчет оставляем как раньше:
-    # calc_currency_in  = what we send
-    # calc_currency_out = what we receive
-    return ui_currency_out, ui_currency_in
-
-
-def calculate_result(
+def calculate_internal_result(
     amount_value: Decimal,
-    currency_in: str,
-    currency_out: str,
+    send_currency: str,
+    receive_currency: str,
     entered_rate: Decimal,
     commission_pct: Decimal,
-    input_is_currency_in: bool,
+    input_is_send_amount: bool,
 ) -> Dict[str, Any]:
     if amount_value <= 0:
         raise ValueError("Amount must be greater than 0")
     if commission_pct < 0 or commission_pct >= 100:
         raise ValueError("Commission must be between 0 and 100")
 
-    effective_rate, rate_mode = resolve_rate(currency_in, currency_out, entered_rate)
+    effective_rate, rate_mode = resolve_rate(send_currency, receive_currency, entered_rate)
     commission_factor = Decimal("1") - (commission_pct / Decimal("100"))
 
     if commission_factor <= 0:
         raise ValueError("Commission leaves nothing to calculate")
 
-    # Базовая логика расчета остается прежней:
-    # Amount in currency in = (Amount in currency out) * exchange rate / (1 - commission)
-    # where currency_in is the currency we send (internal)
-    # and currency_out is the currency we receive (internal).
-    if input_is_currency_in:
-        amount_in = amount_value
-        amount_out = amount_in * commission_factor / effective_rate
+    # Main equality, keeping the original calculation logic internally:
+    # send_amount = receive_amount * effective_rate / (1 - commission)
+    # receive_amount = send_amount * (1 - commission) / effective_rate
+    if input_is_send_amount:
+        send_amount = amount_value
+        receive_amount = send_amount * commission_factor / effective_rate
     else:
-        amount_out = amount_value
-        amount_in = amount_out * effective_rate / commission_factor
+        receive_amount = amount_value
+        send_amount = receive_amount * effective_rate / commission_factor
+
+    before_margin = receive_amount * effective_rate
 
     return {
-        "currency_in": currency_in,
-        "currency_out": currency_out,
-        "amount_in": amount_in,
-        "amount_out": amount_out,
+        "send_currency": send_currency,
+        "receive_currency": receive_currency,
+        "send_amount": send_amount,
+        "receive_amount": receive_amount,
+        "before_margin": before_margin,
         "entered_rate": entered_rate,
-        "entered_rate_pair": get_entered_rate_pair_label(currency_in, currency_out),
         "effective_rate": effective_rate,
         "commission_pct": commission_pct,
-        "input_is_currency_in": input_is_currency_in,
         "rate_mode": rate_mode,
     }
 
 
-def center_text(
+def get_fitted_font(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    max_width: int,
+    max_height: int,
+    start_size: int,
+    bold: bool = False,
+) -> ImageFont.ImageFont:
+    size = start_size
+    while size >= 20:
+        font = load_font(size, bold=bold)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        if width <= max_width and height <= max_height:
+            return font
+        size -= 4
+    return load_font(20, bold=bold)
+
+
+def draw_centered_text(
     draw: ImageDraw.ImageDraw,
     box: Tuple[int, int, int, int],
     text: str,
-    font: ImageFont.ImageFont,
-    fill: Tuple[int, int, int],
+    bold: bool = False,
+    start_size: int = 120,
+    fill: Tuple[int, int, int] = TEXT,
 ) -> None:
     left, top, right, bottom = box
+    max_width = max(1, right - left - 40)
+    max_height = max(1, bottom - top - 30)
+    font = get_fitted_font(draw, text, max_width, max_height, start_size, bold=bold)
     bbox = draw.textbbox((0, 0), text, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
-    x = left + (right - left - text_w) / 2
-    y = top + (bottom - top - text_h) / 2 - 4
+    x = left + ((right - left - text_w) // 2)
+    y = top + ((bottom - top - text_h) // 2) - 6
     draw.text((x, y), text, font=font, fill=fill)
 
 
-def prepare_display_rows(result: Dict[str, Any]) -> list[tuple[str, str, str, bool, bool]]:
-    to_currency = result["currency_out"]
-    from_currency = result["currency_in"]
-    to_amount = result["amount_out"]
-    from_amount = result["amount_in"]
-    rate_value = result["effective_rate"]
-    before_margin = to_amount * rate_value
-    pair_label = f"{to_currency}{from_currency}"
-
-    return [
-        ("TO AMOUNT IN", to_currency, format_decimal(to_amount, 2, strip_trailing=False), True, True),
-        ("FX RATE", pair_label, format_rate_value(rate_value), False, True),
-        ("BEFORE MARGIN", from_currency, format_decimal(before_margin, 2, strip_trailing=False), False, False),
-        (
-            "CONTRACT MARGIN",
-            "%",
-            f"{format_decimal(result['commission_pct'], 2, strip_trailing=False)}%",
-            False,
-            True,
-        ),
-        ("FROM AMOUNT IN", from_currency, format_decimal(from_amount, 2, strip_trailing=False), True, False),
-    ]
-
-
 def create_result_image(result: Dict[str, Any]) -> bytes:
-    rows = prepare_display_rows(result)
+    width, height = 3600, 1350
+    margin = 55
+    table_left = margin
+    table_top = margin
+    table_right = width - margin
+    table_bottom = height - margin
 
-    width = 1700
-    row_height = 105
-    outer_margin = 28
-    table_width = width - 2 * outer_margin
-    height = outer_margin * 2 + row_height * len(rows)
+    label_col_width = 1380
+    ccy_col_width = 760
+    value_col_width = (table_right - table_left) - label_col_width - ccy_col_width
 
-    img = Image.new("RGB", (width, height), WHITE)
+    x0 = table_left
+    x1 = x0 + label_col_width
+    x2 = x1 + ccy_col_width
+    x3 = x2 + value_col_width
+
+    row_count = 5
+    row_height = (table_bottom - table_top) // row_count
+
+    img = Image.new("RGB", (width, height), TABLE_OUTER_BG)
     draw = ImageDraw.Draw(img)
 
-    label_font_bold = load_font(50, bold=True)
-    label_font_regular = load_font(46, bold=False)
-    ccy_font_bold = load_font(48, bold=True)
-    ccy_font_regular = load_font(44, bold=False)
-    value_font_bold = load_font(50, bold=True)
-    value_font_regular = load_font(46, bold=False)
+    draw.rectangle((table_left, table_top, table_right, table_top + row_count * row_height), fill=ROW_WHITE)
 
-    col1_w = int(table_width * 0.39)
-    col2_w = int(table_width * 0.215)
-    col3_w = table_width - col1_w - col2_w
+    rows = [
+        ("TO AMOUNT IN", result["ui_currency_in"], format_decimal(result["receive_amount"], 2), True),
+        ("FX RATE", result["fx_rate_label"], format_rate_value(result["entered_rate"]), False),
+        ("BEFORE MARGIN", result["ui_currency_out"], format_decimal(result["before_margin"], 2), False),
+        ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2)}%", False),
+        ("FROM AMOUNT IN", result["ui_currency_out"], format_decimal(result["send_amount"], 2), True),
+    ]
 
-    x0 = outer_margin
-    x1 = x0 + col1_w
-    x2 = x1 + col2_w
-    x3 = x2 + col3_w
-
-    table_top = outer_margin
-
-    # Заливка строк и отдельных value cells.
-    for idx, row in enumerate(rows):
-        top = table_top + idx * row_height
+    for row_index, (label, ccy, value, is_amount_row) in enumerate(rows):
+        top = table_top + row_index * row_height
         bottom = top + row_height
+        row_fill = ROW_BLUE if row_index in {1, 3} else ROW_WHITE
+        draw.rectangle((table_left, top, table_right, bottom), fill=row_fill)
 
-        # Базовая заливка всей строки.
-        draw.rectangle((x0, top, x3, bottom), fill=TABLE_BG)
+        # Cell borders
+        draw.rectangle((x0, top, x1, bottom), outline=GRID, width=3)
+        draw.rectangle((x1, top, x2, bottom), outline=GRID, width=3)
+        draw.rectangle((x2, top, x3, bottom), outline=GRID, width=3)
 
-        # Подсветка value cells как в референсе: 1, 2 и 4 строки.
-        _, _, _, _, highlight_value = row
-        if highlight_value:
-            draw.rectangle((x2, top, x3, bottom), fill=HIGHLIGHT)
+        # Much larger text
+        label_size = 128 if is_amount_row else 114
+        ccy_size = 128 if is_amount_row else 114
+        value_size = 136 if is_amount_row else 118
 
-    # Сетка.
-    for i in range(len(rows) + 1):
-        y = table_top + i * row_height
-        draw.line((x0, y, x3, y), fill=GRID, width=2)
-    for x in (x0, x1, x2, x3):
-        draw.line((x, table_top, x, table_top + row_height * len(rows)), fill=GRID, width=2)
+        draw_centered_text(draw, (x0, top, x1, bottom), label, bold=is_amount_row, start_size=label_size)
+        draw_centered_text(draw, (x1, top, x2, bottom), ccy, bold=is_amount_row, start_size=ccy_size)
+        draw_centered_text(draw, (x2, top, x3, bottom), value, bold=is_amount_row, start_size=value_size)
 
-    # Текст.
-    for idx, (label, ccy, value, emphasize, _) in enumerate(rows):
-        top = table_top + idx * row_height
-        bottom = top + row_height
-
-        label_font = label_font_bold if emphasize else label_font_regular
-        ccy_font = ccy_font_bold if emphasize else ccy_font_regular
-        value_font = value_font_bold if emphasize else value_font_regular
-
-        center_text(draw, (x0, top, x1, bottom), label, label_font, TEXT)
-        center_text(draw, (x1, top, x2, bottom), ccy, ccy_font, TEXT)
-        center_text(draw, (x2, top, x3, bottom), value, value_font, TEXT)
+    # Outer border
+    draw.rectangle((table_left, table_top, table_right, table_top + row_count * row_height), outline=GRID, width=4)
 
     buffer = BytesIO()
     img.save(buffer, format="PNG")
@@ -382,21 +358,21 @@ async def restart_callback(callback: CallbackQuery, state: FSMContext) -> None:
 @dp.callback_query(CalcStates.waiting_currency_in, F.data.startswith("currency_in:"))
 async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    currency_in = callback.data.split(":", maxsplit=1)[1]
+    ui_currency_in = callback.data.split(":", maxsplit=1)[1]
 
-    if currency_in not in CURRENCIES:
+    if ui_currency_in not in CURRENCIES:
         await callback.message.answer("❌ Unsupported currency. Send /start to try again.")
         await state.clear()
         return
 
-    await state.update_data(currency_in=currency_in)
+    await state.update_data(ui_currency_in=ui_currency_in)
     await state.set_state(CalcStates.waiting_currency_out)
 
     await callback.message.edit_text(
         f"💸 <b>Currency OUT</b>\n\n"
-        f"Selected Currency IN: <code>{currency_in}</code>\n"
+        f"Selected IN: <code>{ui_currency_in}</code>\n"
         f"Currency that we send:",
-        reply_markup=build_currency_keyboard("currency_out", exclude=currency_in),
+        reply_markup=build_currency_keyboard("currency_out", exclude=ui_currency_in),
         parse_mode="HTML",
     )
 
@@ -404,26 +380,26 @@ async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> No
 @dp.callback_query(CalcStates.waiting_currency_out, F.data.startswith("currency_out:"))
 async def currency_out_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    currency_out = callback.data.split(":", maxsplit=1)[1]
+    ui_currency_out = callback.data.split(":", maxsplit=1)[1]
     data = await state.get_data()
-    currency_in = data.get("currency_in")
+    ui_currency_in = data.get("ui_currency_in")
 
-    if currency_out not in CURRENCIES or not currency_in:
+    if ui_currency_out not in CURRENCIES or not ui_currency_in:
         await callback.message.answer("❌ Session expired. Send /start to begin again.")
         await state.clear()
         return
 
-    if currency_out == currency_in:
+    if ui_currency_out == ui_currency_in:
         await callback.answer("Currency OUT must be different", show_alert=True)
         return
 
-    await state.update_data(currency_out=currency_out)
+    await state.update_data(ui_currency_out=ui_currency_out)
     await state.set_state(CalcStates.waiting_amount_side)
 
     await callback.message.edit_text(
         f"↕️ <b>Select the amount you want to enter</b>\n\n"
-        f"<code>{currency_in} ↔ {currency_out}</code>",
-        reply_markup=build_amount_side_keyboard(currency_in, currency_out),
+        f"<code>{ui_currency_in} ↔ {ui_currency_out}</code>",
+        reply_markup=build_amount_side_keyboard(ui_currency_in, ui_currency_out),
         parse_mode="HTML",
     )
 
@@ -439,7 +415,7 @@ async def amount_side_callback(callback: CallbackQuery, state: FSMContext) -> No
         await state.clear()
         return
 
-    input_currency = data["currency_in"] if side == "in" else data["currency_out"]
+    input_currency = data["ui_currency_in"] if side == "in" else data["ui_currency_out"]
     await state.update_data(input_side=side)
     await state.set_state(CalcStates.waiting_amount)
 
@@ -499,22 +475,13 @@ async def process_commission(message: Message, state: FSMContext) -> None:
     await state.set_state(CalcStates.waiting_rate)
 
     data = await state.get_data()
-    calc_currency_in, calc_currency_out = get_calc_currencies_from_ui(
-        data["currency_in"], data["currency_out"]
-    )
-    rate_pair = get_entered_rate_pair_label(calc_currency_in, calc_currency_out)
-    rate_mode = get_rate_mode(calc_currency_in, calc_currency_out)
-
-    if rate_mode == "reverse":
-        hint = (
-            f"For reverse pair <code>{calc_currency_in}-{calc_currency_out}</code> enter the rate for "
-            f"<code>{rate_pair}</code>. The bot will use <code>1/rate</code> automatically."
-        )
-    else:
-        hint = "Examples: <code>0.0112</code> or <code>90</code>"
+    ui_currency_in = data["ui_currency_in"]
+    ui_currency_out = data["ui_currency_out"]
+    rate_pair = f"{ui_currency_in}{ui_currency_out}"
 
     await message.answer(
-        f"📈 <b>Enter exchange rate for {rate_pair}</b>\n\n{hint}",
+        f"📈 <b>Enter exchange rate for {rate_pair}</b>\n\n"
+        f"Examples: <code>0.0112</code> or <code>90</code>",
         reply_markup=restart_keyboard(),
         parse_mode="HTML",
     )
@@ -527,34 +494,45 @@ async def process_rate(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        rate = parse_decimal(message.text)
+        entered_rate = parse_decimal(message.text)
     except ValueError:
         await message.answer("❌ Invalid exchange rate. Example: 90")
         return
 
-    if rate <= 0:
+    if entered_rate <= 0:
         await message.answer("❌ Exchange rate must be greater than 0.")
         return
 
     data = await state.get_data()
-    calc_currency_in, calc_currency_out = get_calc_currencies_from_ui(
-        data["currency_in"], data["currency_out"]
-    )
+
+    ui_currency_in = data["ui_currency_in"]   # currency that we receive
+    ui_currency_out = data["ui_currency_out"] # currency that we send
+
+    send_currency = ui_currency_out
+    receive_currency = ui_currency_in
+    input_is_send_amount = data["input_side"] == "out"
 
     try:
-        result = calculate_result(
+        calc = calculate_internal_result(
             amount_value=Decimal(data["amount"]),
-            currency_in=calc_currency_in,
-            currency_out=calc_currency_out,
-            entered_rate=rate,
+            send_currency=send_currency,
+            receive_currency=receive_currency,
+            entered_rate=entered_rate,
             commission_pct=Decimal(data["commission_pct"]),
-            input_is_currency_in=data["input_side"] == "out",
+            input_is_send_amount=input_is_send_amount,
         )
     except ValueError as exc:
         await message.answer(f"❌ {exc}")
         return
 
-    image_bytes = create_result_image(result)
+    image_payload = {
+        **calc,
+        "ui_currency_in": ui_currency_in,
+        "ui_currency_out": ui_currency_out,
+        "fx_rate_label": f"{ui_currency_in}{ui_currency_out}",
+    }
+
+    image_bytes = create_result_image(image_payload)
 
     await message.answer_photo(
         BufferedInputFile(image_bytes, filename="calculation.png"),
