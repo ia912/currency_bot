@@ -141,12 +141,14 @@ def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
         [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
             "DejaVuSans-Bold.ttf",
         ]
         if bold
         else [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
             "DejaVuSans.ttf",
         ]
     )
@@ -156,7 +158,10 @@ def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
             return ImageFont.truetype(path, size)
         except OSError:
             continue
-    return ImageFont.load_default()
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def get_rate_mode(send_currency: str, receive_currency: str) -> RateMode:
@@ -241,7 +246,7 @@ def fit_font(
         bbox = draw.textbbox((0, 0), text, font=font)
         width = bbox[2] - bbox[0]
         height = bbox[3] - bbox[1]
-        if width <= box_width * 0.90 and height <= box_height * 0.72:
+        if width <= box_width * 0.97 and height <= box_height * 0.82:
             return font
         size -= 4
     return load_font(min_size, bold=bold)
@@ -260,7 +265,7 @@ def center_text(
     text_h = bbox[3] - bbox[1]
     x = left + (right - left - text_w) / 2
     y = top + (bottom - top - text_h) / 2 - 3
-    draw.text((x, y), text, font=font, fill=fill)
+    draw.text((x, y), text, font=font, fill=fill, stroke_width=2, stroke_fill=fill)
 
 
 def prepare_display_rows(result: Dict[str, Any]) -> list[tuple[str, str, str, bool]]:
@@ -327,8 +332,8 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
             label,
             x1 - x0,
             row_height,
-            start_size=104 if emphasize_amount else 96,
-            min_size=74,
+            start_size=124 if emphasize_amount else 116,
+            min_size=84,
             bold=True,
         )
         ccy_font = fit_font(
@@ -336,8 +341,8 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
             ccy,
             x2 - x1,
             row_height,
-            start_size=104 if emphasize_amount else 96,
-            min_size=74,
+            start_size=124 if emphasize_amount else 116,
+            min_size=84,
             bold=True,
         )
         value_font = fit_font(
@@ -345,8 +350,8 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
             value,
             x3 - x2,
             row_height,
-            start_size=118 if emphasize_amount else 108,
-            min_size=80,
+            start_size=142 if emphasize_amount else 132,
+            min_size=96,
             bold=True,
         )
 
