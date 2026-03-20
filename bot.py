@@ -32,6 +32,15 @@ DIRECT_PAIRS = {
     ("RUB", "AED"),
     ("RUB", "AEN"),
     ("RUB", "CNY"),
+    ("AED", "USD"),
+    ("AED", "USN"),
+    ("AED", "USDT"),
+    ("AED", "AEN"),
+    ("CNY", "USD"),
+    ("CNY", "USN"),
+    ("CNY", "USDT"),
+    ("CNY", "AED"),
+    ("CNY", "AEN"),
 }
 
 CURRENCY_LABELS = {
@@ -278,11 +287,11 @@ def prepare_display_rows(result: Dict[str, Any]) -> list[tuple[str, str, str, bo
     pair_label = f"{receive_currency}{send_currency}"
 
     return [
-        ("FROM AMOUNT IN", receive_currency, format_decimal(receive_amount, 2, strip_trailing=False), True),
+        ("TO AMOUNT IN", receive_currency, format_decimal(receive_amount, 2, strip_trailing=False), True),
         ("FX RATE", pair_label, format_rate_value(entered_rate), False),
         ("BEFORE MARGIN", send_currency, format_decimal(before_margin, 2, strip_trailing=False), False),
         ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2, strip_trailing=False)}%", False),
-        ("TO AMOUNT IN", send_currency, format_decimal(send_amount, 2, strip_trailing=False), True),
+        ("FROM AMOUNT IN", send_currency, format_decimal(send_amount, 2, strip_trailing=False), True),
     ]
 
 
