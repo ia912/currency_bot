@@ -43,7 +43,7 @@ CURRENCY_LABELS = {
     "CNY": "🇨🇳 CNY",
 }
 
-# Новый стиль картинки: светло-голубой фон и крупный жирный текст.
+# Светло-голубой фон и крупный жирный текст.
 PAGE_BG = (226, 243, 255)
 CARD_BG = (255, 255, 255)
 HEADER_BG = (193, 226, 250)
@@ -53,7 +53,6 @@ TEXT = (23, 35, 47)
 TEXT_SOFT = (69, 86, 102)
 
 RateMode = Literal["direct", "reverse", "custom"]
-
 
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -139,8 +138,7 @@ def format_decimal(value: Decimal, places: int = 2, strip_trailing: bool = False
     quantized = value.quantize(quantize_pattern(places), rounding=ROUND_HALF_UP)
     text = f"{quantized:,.{places}f}".replace(",", " ")
     if strip_trailing and "." in text:
-        text = text.rstrip("0").
-rstrip(".")
+        text = text.rstrip("0").rstrip(".")
     return text
 
 
@@ -215,10 +213,10 @@ def calculate_result(
     if commission_factor <= 0:
         raise ValueError("Commission leaves nothing to calculate")
 
-    # Основное равенство по твоему уточнению:
-    # amount_in_currency_in = amount_in_currency_out * exchange_rate / (1 - commission)
+    # Основное равенство:
+    # Amount in currency in = (Amount in currency out) * exchange rate / (1 - commission)
     # Отсюда:
-    # amount_out = amount_in * (1 - commission) / exchange_rate
+    # Amount out = Amount in * (1 - commission) / exchange rate
     if input_is_currency_in:
         amount_in = amount_value
         amount_out = amount_in * commission_factor / effective_rate
@@ -263,7 +261,8 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
     header_font = load_font(34, bold=True)
     cell_font = load_font(34, bold=True)
     value_font = load_font(38, bold=True)
-card_left, card_top, card_right, card_bottom = 50, 45, width - 50, height - 45
+
+    card_left, card_top, card_right, card_bottom = 50, 45, width - 50, height - 45
     draw.rounded_rectangle(
         (card_left, card_top, card_right, card_bottom),
         radius=34,
@@ -374,7 +373,7 @@ async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> No
     currency_in = callback.data.split(":", maxsplit=1)[1]
 
     if currency_in not in CURRENCIES:
-        await callback.message.answer("❌ Unsupported currency.Send /start to try again.")
+        await callback.message.answer("❌ Unsupported currency. Send /start to try again.")
         await state.clear()
         return
 
@@ -411,7 +410,7 @@ async def currency_out_callback(callback: CallbackQuery, state: FSMContext) -> N
 
     await callback.message.edit_text(
         f"↕️ <b>Select the amount you want to enter</b>\n\n"
-        f"<code>{currency_in} ↔️ {currency_out}</code>",
+        f"<code>{currency_in} ↔ {currency_out}</code>",
         reply_markup=build_amount_side_keyboard(currency_in, currency_out),
         parse_mode="HTML",
     )
@@ -490,7 +489,7 @@ async def process_commission(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     currency_in = data["currency_in"]
     currency_out = data["currency_out"]
-rate_pair = get_entered_rate_pair_label(currency_in, currency_out)
+    rate_pair = get_entered_rate_pair_label(currency_in, currency_out)
     rate_mode = get_rate_mode(currency_in, currency_out)
 
     if rate_mode == "reverse":
@@ -572,5 +571,5 @@ async def main() -> None:
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
-if name == "__main__":
+if __name__ == "__main__":
     asyncio.run(main())
