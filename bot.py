@@ -22,9 +22,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 CURRENCIES = ["RUB", "USD", "USN", "USDT", "AED", "AEN", "CNY"]
 
-# Internal direct pairs:
-# send RUB -> receive foreign currency uses the entered rate as-is.
-# For the reverse direction the formula uses 1 / entered_rate.
+# Direct pairs:
+# for these selected Currency IN -> Currency OUT pairs
+# the entered exchange rate is used in the formula as-is.
+# For reverse pairs the formula uses 1 / entered_rate.
 DIRECT_PAIRS = {
     ("RUB", "USD"),
     ("RUB", "USN"),
@@ -68,8 +69,8 @@ dp = Dispatcher(storage=MemoryStorage())
 
 
 class CalcStates(StatesGroup):
-    waiting_currency_in = State()   # receive currency
-    waiting_currency_out = State()  # send currency
+    waiting_currency_in = State()
+    waiting_currency_out = State()
     waiting_amount_side = State()
     waiting_amount = State()
     waiting_commission = State()
@@ -113,7 +114,7 @@ async def start_dialog(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(CalcStates.waiting_currency_in)
     await message.answer(
-        "💱 <b>Currency IN</b>\n\nCurrency that we receive:",
+        "💱 <b>Currency IN</b>\n\nCurrency that we send:",
         reply_markup=build_currency_keyboard("currency_in"),
         parse_mode="HTML",
     )
@@ -176,19 +177,19 @@ def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-def get_rate_mode(send_currency: str, receive_currency: str) -> RateMode:
-    if (send_currency, receive_currency) in DIRECT_PAIRS:
+def get_rate_mode(currency_in: str, currency_out: str) -> RateMode:
+    if (currency_in, currency_out) in DIRECT_PAIRS:
         return "direct"
-    if (receive_currency, send_currency) in DIRECT_PAIRS:
+    if (currency_out, currency_in) in DIRECT_PAIRS:
         return "reverse"
     return "custom"
 
 
-def resolve_rate(send_currency: str, receive_currency: str, entered_rate: Decimal) -> Tuple[Decimal, RateMode]:
+def resolve_rate(currency_in: str, currency_out: str, entered_rate: Decimal) -> Tuple[Decimal, RateMode]:
     if entered_rate <= 0:
         raise ValueError("Exchange rate must be greater than 0")
 
-    rate_mode = get_rate_mode(send_currency, receive_currency)
+    rate_mode = get_rate_mode(currency_in, currency_out)
     if rate_mode == "direct":
         return entered_rate, "direct"
     if rate_mode == "reverse":
@@ -198,47 +199,47 @@ def resolve_rate(send_currency: str, receive_currency: str, entered_rate: Decima
 
 def calculate_result(
     amount_value: Decimal,
-    receive_currency: str,
-    send_currency: str,
+    currency_in: str,
+    currency_out: str,
     entered_rate: Decimal,
     commission_pct: Decimal,
-    input_is_receive_amount: bool,
+    input_is_currency_in: bool,
 ) -> Dict[str, Any]:
     if amount_value <= 0:
         raise ValueError("Amount must be greater than 0")
     if commission_pct < 0 or commission_pct >= 100:
         raise ValueError("Commission must be between 0 and 100")
 
-    effective_rate, rate_mode = resolve_rate(send_currency, receive_currency, entered_rate)
+    effective_rate, rate_mode = resolve_rate(currency_in, currency_out, entered_rate)
     commission_factor = Decimal("1") - (commission_pct / Decimal("100"))
 
     if commission_factor <= 0:
         raise ValueError("Commission leaves nothing to calculate")
 
-    # Display semantics:
-    # currency_in  = currency that we receive
-    # currency_out = currency that we send
+    # Main equality:
+    # amount in currency out = amount in currency in * (1 - commission) / exchange rate
     #
-    # send_amount = receive_amount * effective_rate / (1 - commission)
-    # receive_amount = send_amount * (1 - commission) / effective_rate
-    if input_is_receive_amount:
-        receive_amount = amount_value
-        send_amount = receive_amount * effective_rate / commission_factor
+    # For direct pairs: use the entered rate as-is.
+    # For reverse pairs: use 1 / entered_rate inside the formula.
+    if input_is_currency_in:
+        amount_in = amount_value
+        before_margin = amount_in * commission_factor
+        amount_out = before_margin / effective_rate
     else:
-        send_amount = amount_value
-        receive_amount = send_amount * commission_factor / effective_rate
-
-    before_margin = send_amount * commission_factor
+        amount_out = amount_value
+        amount_in = amount_out * effective_rate / commission_factor
+        before_margin = amount_out * effective_rate
 
     return {
-        "receive_currency": receive_currency,
-        "send_currency": send_currency,
-        "receive_amount": receive_amount,
-        "send_amount": send_amount,
+        "currency_in": currency_in,
+        "currency_out": currency_out,
+        "amount_in": amount_in,
+        "amount_out": amount_out,
         "before_margin": before_margin,
         "entered_rate": entered_rate,
         "effective_rate": effective_rate,
         "commission_pct": commission_pct,
+        "input_is_currency_in": input_is_currency_in,
         "rate_mode": rate_mode,
     }
 
@@ -281,20 +282,20 @@ def center_text(
 
 
 def prepare_display_rows(result: Dict[str, Any]) -> list[tuple[str, str, str, bool]]:
-    receive_currency = result["receive_currency"]
-    send_currency = result["send_currency"]
-    receive_amount = result["receive_amount"]
-    send_amount = result["send_amount"]
+    currency_in = result["currency_in"]
+    currency_out = result["currency_out"]
+    amount_in = result["amount_in"]
+    amount_out = result["amount_out"]
     before_margin = result["before_margin"]
     entered_rate = result["entered_rate"]
-    pair_label = f"{receive_currency}{send_currency}"
+    pair_label = f"{currency_in}{currency_out}"
 
     return [
-        ("TO AMOUNT IN", receive_currency, format_decimal(receive_amount, 2, strip_trailing=False), True),
+        ("TO AMOUNT IN", currency_out, format_decimal(amount_out, 2, strip_trailing=False), True),
         ("FX RATE", pair_label, format_rate_value(entered_rate), False),
-        ("BEFORE MARGIN", send_currency, format_decimal(before_margin, 2, strip_trailing=False), False),
+        ("BEFORE MARGIN", currency_in, format_decimal(before_margin, 2, strip_trailing=False), False),
         ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2, strip_trailing=False)}%", False),
-        ("FROM AMOUNT IN", send_currency, format_decimal(send_amount, 2, strip_trailing=False), True),
+        ("FROM AMOUNT IN", currency_in, format_decimal(amount_in, 2, strip_trailing=False), True),
     ]
 
 
@@ -320,7 +321,6 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
     x3 = x2 + col3_w
     table_top = outer_margin
 
-    # Only 2nd and 4th rows are blue.
     for idx in range(len(rows)):
         top = table_top + idx * row_height
         bottom = top + row_height
@@ -410,7 +410,7 @@ async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> No
     await callback.message.edit_text(
         f"💸 <b>Currency OUT</b>\n\n"
         f"Selected Currency IN: <code>{currency_in}</code>\n"
-        f"Currency that we send:",
+        f"Currency that we receive:",
         reply_markup=build_currency_keyboard("currency_out", exclude=currency_in),
         parse_mode="HTML",
     )
@@ -545,11 +545,11 @@ async def process_rate(message: Message, state: FSMContext) -> None:
     try:
         result = calculate_result(
             amount_value=Decimal(data["amount"]),
-            receive_currency=data["currency_in"],
-            send_currency=data["currency_out"],
+            currency_in=data["currency_in"],
+            currency_out=data["currency_out"],
             entered_rate=rate,
             commission_pct=Decimal(data["commission_pct"]),
-            input_is_receive_amount=data["input_side"] == "in",
+            input_is_currency_in=data["input_side"] == "in",
         )
     except ValueError as exc:
         await message.answer(f"❌ {exc}")
