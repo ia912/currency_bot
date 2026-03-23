@@ -114,7 +114,7 @@ async def start_dialog(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(CalcStates.waiting_currency_in)
     await message.answer(
-        "💱 <b>Currency IN</b>\n\nCurrency that we send:",
+        "💱 <b>Currency IN</b>\n\nCurrency that we recieve:",
         reply_markup=build_currency_keyboard("currency_in"),
         parse_mode="HTML",
     )
@@ -410,7 +410,7 @@ async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> No
     await callback.message.edit_text(
         f"💸 <b>Currency OUT</b>\n\n"
         f"Selected Currency IN: <code>{currency_in}</code>\n"
-        f"Currency that we receive:",
+        f"Currency that we send:",
         reply_markup=build_currency_keyboard("currency_out", exclude=currency_in),
         parse_mode="HTML",
     )
