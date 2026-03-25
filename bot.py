@@ -57,6 +57,12 @@ CURRENCY_LABELS = {
     "CNY": "🇨🇳 CNY",
 }
 
+SPECIAL_CROSS_PAIR_SETS = {
+    frozenset(("RUB", "AED")),
+    frozenset(("RUB", "AEN")),
+}
+DEFAULT_AEDUSD_RATE = Decimal("3.6725")
+
 # Table colors
 WHITE = (255, 255, 255)
 ROW_BLUE = (214, 236, 255)
@@ -75,6 +81,9 @@ class CalcStates(StatesGroup):
     waiting_amount = State()
     waiting_commission = State()
     waiting_rate = State()
+    waiting_rubusd_rate = State()
+    waiting_aedusd_choice = State()
+    waiting_aedusd_custom = State()
 
 
 def restart_keyboard() -> InlineKeyboardMarkup:
@@ -110,14 +119,30 @@ def build_amount_side_keyboard(currency_in: str, currency_out: str) -> InlineKey
     )
 
 
+def build_aedusd_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="3.6725", callback_data="aedusd_choice:3.6725"),
+                InlineKeyboardButton(text="Enter your rate", callback_data="aedusd_choice:custom"),
+            ],
+            [InlineKeyboardButton(text="🔄 Restart", callback_data="restart")],
+        ]
+    )
+
+
 async def start_dialog(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(CalcStates.waiting_currency_in)
     await message.answer(
-        "💱 <b>Currency IN</b>\n\nCurrency that we recieve:",
+        "💱 <b>Currency IN</b>\n\nCurrency that we send:",
         reply_markup=build_currency_keyboard("currency_in"),
         parse_mode="HTML",
     )
+
+
+def is_special_cross_pair(currency_in: str, currency_out: str) -> bool:
+    return frozenset((currency_in, currency_out)) in SPECIAL_CROSS_PAIR_SETS
 
 
 def parse_decimal(text: str) -> Decimal:
@@ -287,12 +312,21 @@ def prepare_display_rows(result: Dict[str, Any]) -> list[tuple[str, str, str, bo
     amount_in = result["amount_in"]
     amount_out = result["amount_out"]
     before_margin = result["before_margin"]
-    entered_rate = result["entered_rate"]
-    pair_label = f"{currency_in}{currency_out}"
 
+    if result.get("special_cross_pair"):
+        return [
+            ("TO AMOUNT IN", currency_out, format_decimal(amount_out, 2, strip_trailing=False), True),
+            ("FX RATE", "RUBUSD", format_rate_value(result["rubusd_rate"]), False),
+            ("FX RATE", "AEDUSD", format_rate_value(result["aedusd_rate"]), False),
+            ("BEFORE MARGIN", currency_in, format_decimal(before_margin, 2, strip_trailing=False), False),
+            ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2, strip_trailing=False)}%", False),
+            ("FROM AMOUNT IN", currency_in, format_decimal(amount_in, 2, strip_trailing=False), True),
+        ]
+
+    pair_label = f"{currency_in}{currency_out}"
     return [
         ("TO AMOUNT IN", currency_out, format_decimal(amount_out, 2, strip_trailing=False), True),
-        ("FX RATE", pair_label, format_rate_value(entered_rate), False),
+        ("FX RATE", pair_label, format_rate_value(result["entered_rate"]), False),
         ("BEFORE MARGIN", currency_in, format_decimal(before_margin, 2, strip_trailing=False), False),
         ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2, strip_trailing=False)}%", False),
         ("FROM AMOUNT IN", currency_in, format_decimal(amount_in, 2, strip_trailing=False), True),
@@ -321,10 +355,12 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
     x3 = x2 + col3_w
     table_top = outer_margin
 
+    blue_rows = {1, 3, 5} if len(rows) == 6 else {1, 3}
+
     for idx in range(len(rows)):
         top = table_top + idx * row_height
         bottom = top + row_height
-        fill = ROW_BLUE if idx in (1, 3) else WHITE
+        fill = ROW_BLUE if idx in blue_rows else WHITE
         draw.rectangle((x0, top, x3, bottom), fill=fill)
 
     table_bottom = table_top + row_height * len(rows)
@@ -376,6 +412,44 @@ def create_result_image(result: Dict[str, Any]) -> bytes:
     return buffer.getvalue()
 
 
+async def send_result_photo(
+    message: Message,
+    state: FSMContext,
+    entered_rate: Decimal,
+    rubusd_rate: Optional[Decimal] = None,
+    aedusd_rate: Optional[Decimal] = None,
+) -> None:
+    data = await state.get_data()
+
+    try:
+        result = calculate_result(
+            amount_value=Decimal(data["amount"]),
+            currency_in=data["currency_in"],
+            currency_out=data["currency_out"],
+            entered_rate=entered_rate,
+            commission_pct=Decimal(data["commission_pct"]),
+            input_is_currency_in=data["input_side"] == "in",
+        )
+    except ValueError as exc:
+        await message.answer(f"❌ {exc}")
+        return
+
+    if rubusd_rate is not None and aedusd_rate is not None:
+        result["special_cross_pair"] = True
+        result["rubusd_rate"] = rubusd_rate
+        result["aedusd_rate"] = aedusd_rate
+
+    image_bytes = create_result_image(result)
+
+    await message.answer_photo(
+        BufferedInputFile(image_bytes, filename="calculation.png"),
+        caption="✅ <b>Calculation complete</b>",
+        parse_mode="HTML",
+        reply_markup=restart_keyboard(),
+    )
+    await state.clear()
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await start_dialog(message, state)
@@ -410,7 +484,7 @@ async def currency_in_callback(callback: CallbackQuery, state: FSMContext) -> No
     await callback.message.edit_text(
         f"💸 <b>Currency OUT</b>\n\n"
         f"Selected Currency IN: <code>{currency_in}</code>\n"
-        f"Currency that we send:",
+        f"Currency that we receive:",
         reply_markup=build_currency_keyboard("currency_out", exclude=currency_in),
         parse_mode="HTML",
     )
@@ -511,9 +585,19 @@ async def process_commission(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(commission_pct=str(commission_pct))
-    await state.set_state(CalcStates.waiting_rate)
 
     data = await state.get_data()
+    if is_special_cross_pair(data["currency_in"], data["currency_out"]):
+        await state.set_state(CalcStates.waiting_rubusd_rate)
+        await message.answer(
+            "📈 <b>Enter exchange rate for RUBUSD</b>\n\n"
+            "Examples: <code>90</code> or <code>90.25</code>",
+            reply_markup=restart_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    await state.set_state(CalcStates.waiting_rate)
     rate_label = f"{data['currency_in']}{data['currency_out']}"
 
     await message.answer(
@@ -521,6 +605,101 @@ async def process_commission(message: Message, state: FSMContext) -> None:
         "Examples: <code>0.0112</code> or <code>90</code>",
         reply_markup=restart_keyboard(),
         parse_mode="HTML",
+    )
+
+
+@dp.message(CalcStates.waiting_rubusd_rate)
+async def process_rubusd_rate(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("❌ Send the exchange rate as text. Example: 90")
+        return
+
+    try:
+        rate = parse_decimal(message.text)
+    except ValueError:
+        await message.answer("❌ Invalid exchange rate. Example: 90")
+        return
+
+    if rate <= 0:
+        await message.answer("❌ Exchange rate must be greater than 0.")
+        return
+
+    await state.update_data(rubusd_rate=str(rate))
+    await state.set_state(CalcStates.waiting_aedusd_choice)
+
+    await message.answer(
+        "📈 <b>Select AEDUSD rate</b>",
+        reply_markup=build_aedusd_choice_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(CalcStates.waiting_aedusd_choice, F.data.startswith("aedusd_choice:"))
+async def aedusd_choice_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    choice = callback.data.split(":", maxsplit=1)[1]
+
+    if choice == "custom":
+        await state.set_state(CalcStates.waiting_aedusd_custom)
+        await callback.message.edit_text(
+            "📈 <b>Enter exchange rate for AEDUSD</b>\n\n"
+            "Example: <code>3.6725</code>",
+            reply_markup=restart_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        aedusd_rate = parse_decimal(choice)
+    except ValueError:
+        await callback.message.answer("❌ Invalid AEDUSD rate. Press Restart and try again.")
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    rubusd_rate = Decimal(data["rubusd_rate"])
+    cross_rate = rubusd_rate / aedusd_rate
+
+    await send_result_photo(
+        callback.message,
+        state,
+        entered_rate=cross_rate,
+        rubusd_rate=rubusd_rate,
+        aedusd_rate=aedusd_rate,
+    )
+
+
+@dp.message(CalcStates.waiting_aedusd_choice)
+async def waiting_aedusd_choice_message(message: Message) -> None:
+    await message.answer("Use the AEDUSD buttons or press Restart.")
+
+
+@dp.message(CalcStates.waiting_aedusd_custom)
+async def process_aedusd_custom(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("❌ Send the exchange rate as text. Example: 3.6725")
+        return
+
+    try:
+        aedusd_rate = parse_decimal(message.text)
+    except ValueError:
+        await message.answer("❌ Invalid exchange rate. Example: 3.6725")
+        return
+
+    if aedusd_rate <= 0:
+        await message.answer("❌ Exchange rate must be greater than 0.")
+        return
+
+    data = await state.get_data()
+    rubusd_rate = Decimal(data["rubusd_rate"])
+    cross_rate = rubusd_rate / aedusd_rate
+
+    await send_result_photo(
+        message,
+        state,
+        entered_rate=cross_rate,
+        rubusd_rate=rubusd_rate,
+        aedusd_rate=aedusd_rate,
     )
 
 
@@ -540,34 +719,14 @@ async def process_rate(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Exchange rate must be greater than 0.")
         return
 
-    data = await state.get_data()
-
-    try:
-        result = calculate_result(
-            amount_value=Decimal(data["amount"]),
-            currency_in=data["currency_in"],
-            currency_out=data["currency_out"],
-            entered_rate=rate,
-            commission_pct=Decimal(data["commission_pct"]),
-            input_is_currency_in=data["input_side"] == "in",
-        )
-    except ValueError as exc:
-        await message.answer(f"❌ {exc}")
-        return
-
-    image_bytes = create_result_image(result)
-
-    await message.answer_photo(
-        BufferedInputFile(image_bytes, filename="calculation.png"),
-        caption="✅ <b>Calculation complete</b>",
-        parse_mode="HTML",
-        reply_markup=restart_keyboard(),
-    )
-    await state.clear()
+    await send_result_photo(message, state, entered_rate=rate)
 
 
 @dp.callback_query(
-    F.data.startswith("currency_in:") | F.data.startswith("currency_out:") | F.data.startswith("amount_side:")
+    F.data.startswith("currency_in:")
+    | F.data.startswith("currency_out:")
+    | F.data.startswith("amount_side:")
+    | F.data.startswith("aedusd_choice:")
 )
 async def stale_callback(callback: CallbackQuery) -> None:
     await callback.answer("Session expired. Press Restart or send /start.", show_alert=False)
