@@ -327,7 +327,7 @@ def prepare_display_rows(result: Dict[str, Any]) -> list[tuple[str, str, str, bo
     return [
         ("TO AMOUNT IN", currency_out, format_decimal(amount_out, 2, strip_trailing=False), True),
         ("FX RATE", pair_label, format_rate_value(result["entered_rate"]), False),
-        ("BEFORE MARGIN", currency_in, format_decimal(before_margin, 2, strip_trailing=False), False),
+        ("Excl MARGIN", currency_in, format_decimal(before_margin, 2, strip_trailing=False), False),
         ("CONTRACT MARGIN", "%", f"{format_decimal(result['commission_pct'], 2, strip_trailing=False)}%", False),
         ("FROM AMOUNT IN", currency_in, format_decimal(amount_in, 2, strip_trailing=False), True),
     ]
